@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2016-2019 Balena Ltd.
+ * Copyright 2016-2021 Balena Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 import { flags } from '@oclif/command';
-import type * as SDK from 'balena-sdk';
 import * as _ from 'lodash';
 import Command from '../../command';
 
@@ -36,10 +35,11 @@ export default class DevicesSupportedCmd extends Command {
 
 		List the supported device types (like 'raspberrypi3' or 'intel-nuc').
 
-		The --verbose option adds extra columns/fields to the output, including the
-		"STATE" column whose values are one of 'new', 'released' or 'discontinued'.
-		However, 'discontinued' device types are only listed if the '--discontinued'
-		option is used.
+		The --verbose option may add extra columns/fields to the output. Currently
+		this includes the "STATE" column which is DEPRECATED and whose values are one
+		of 'new', 'beta', 'released', 'discontinued' or 'N/A' (Not Available).
+		'discontinued' device types are only listed if the '--discontinued' option
+		is also used, and this option is also DEPRECATED.
 
 		The --json option is recommended when scripting the output of this command,
 		because the JSON format is less likely to change and it better represents data
@@ -60,7 +60,7 @@ export default class DevicesSupportedCmd extends Command {
 
 	public static flags: flags.Input<FlagsDef> = {
 		discontinued: flags.boolean({
-			description: 'include "discontinued" device types',
+			description: 'include "discontinued" device types (DEPRECATED)',
 		}),
 		help: cf.help,
 		json: flags.boolean({
@@ -69,45 +69,50 @@ export default class DevicesSupportedCmd extends Command {
 		}),
 		verbose: flags.boolean({
 			char: 'v',
-			description:
-				'add extra columns in the tabular output (ALIASES, ARCH, STATE)',
+			description: 'add extra columns in the tabular output',
 		}),
 	};
 
 	public async run() {
 		const { flags: options } = this.parse<FlagsDef, {}>(DevicesSupportedCmd);
-		const dts = await getBalenaSdk().models.config.getDeviceTypes();
-		let deviceTypes: Array<Partial<SDK.DeviceTypeJson.DeviceType>> = dts.map(
-			(d) => {
-				if (d.aliases && d.aliases.length) {
-					// remove aliases that are equal to the slug
-					d.aliases = d.aliases.filter((alias: string) => alias !== d.slug);
-					if (!options.json) {
-						// stringify the aliases array with commas and spaces
-						d.aliases = [d.aliases.join(', ')];
-					}
-				} else {
-					// ensure it is always an array (for the benefit of JSON output)
-					d.aliases = [];
-				}
-				return d;
-			},
-		);
+		const [dts, configDTs] = await Promise.all([
+			getBalenaSdk().models.deviceType.getAll({
+				$expand: { is_of__cpu_architecture: { $select: 'slug' } },
+			}),
+			getBalenaSdk().models.config.getDeviceTypes(),
+		]);
+		const configDTsBySlug = _.keyBy(configDTs, (o) => o.slug);
+		interface DT {
+			slug: string;
+			aliases: string[];
+			arch: string;
+			state: string;
+			name: string;
+		}
+		let deviceTypes: DT[] = [];
+		for (const dt of dts) {
+			const configDT = configDTsBySlug[dt.slug] || {};
+			const aliases = (configDT.aliases || []).filter(
+				(alias) => alias !== dt.slug,
+			);
+			const arch = (dt.is_of__cpu_architecture as any)?.[0]?.slug;
+			deviceTypes.push({
+				slug: dt.slug,
+				aliases: options.json ? aliases : [aliases.join(', ')],
+				arch: arch || 'n/a',
+				// 'BETA' renamed to 'NEW'
+				// https://www.flowdock.com/app/rulemotion/i-cli/threads/1svvyaf8FAZeSdG4dPJc4kHOvJU
+				state: (configDT.state || 'N/A').replace('BETA', 'NEW'),
+				name: dt.name,
+			});
+		}
 		if (!options.discontinued) {
 			deviceTypes = deviceTypes.filter((dt) => dt.state !== 'DISCONTINUED');
 		}
 		const fields = options.verbose
 			? ['slug', 'aliases', 'arch', 'state', 'name']
 			: ['slug', 'aliases', 'arch', 'name'];
-		deviceTypes = _.sortBy(
-			deviceTypes.map((d) => {
-				const picked = _.pick(d, fields);
-				// 'BETA' renamed to 'NEW'
-				picked.state = picked.state === 'BETA' ? 'NEW' : picked.state;
-				return picked;
-			}),
-			fields,
-		);
+		deviceTypes = _.sortBy(deviceTypes, fields);
 		if (options.json) {
 			console.log(JSON.stringify(deviceTypes, null, 4));
 		} else {
