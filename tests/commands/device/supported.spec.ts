@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2019-2020 Balena Ltd.
+ * Copyright 2019-2021 Balena Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,20 +44,22 @@ describe('balena devices supported', function () {
 
 	it('should list currently supported devices, with correct filtering', async () => {
 		api.expectGetDeviceTypes();
+		api.expectGetConfigDeviceTypes();
 
 		const { out, err } = await runCommand('devices supported');
 
-		const lines = cleanOutput(out);
+		const lines = cleanOutput(out, true);
 
-		expect(lines[0].replace(/  +/g, ' ')).to.equal('SLUG ALIASES ARCH NAME');
+		expect(lines[0]).to.equal('SLUG ALIASES ARCH NAME');
 		expect(lines).to.have.lengthOf.at.least(2);
+		expect(lines).to.contain('intel-nuc nuc amd64 Intel NUC');
+		expect(lines).to.contain(
+			'odroid-xu4 odroid-ux3, odroid-u3+ armv7hf ODROID-XU4',
+		);
 
 		// Discontinued devices should be filtered out from results
 		expect(lines.some((l) => l.includes('DISCONTINUED'))).to.be.false;
-
-		// Experimental devices should be listed as new
-		expect(lines.some((l) => l.includes('EXPERIMENTAL'))).to.be.false;
-		expect(lines.some((l) => l.includes('NEW'))).to.be.true;
+		expect(lines.some((l) => l.includes('NEW'))).to.be.false;
 
 		expect(err).to.eql([]);
 	});
